@@ -23,14 +23,14 @@ bloom-generate rosdebian \
   --os-version "$(lsb_release -cs)" \
   --ros-distro "${ROS_DISTRO}"
 
-# Allow CMake FetchContent (FTXUI, SPSCQueue) to download during build.
-# bloom defaults to FETCHCONTENT_FULLY_DISCONNECTED=ON, which breaks the build.
+# Patch debian/rules to:
+#   - allow CMake FetchContent (FTXUI, SPSCQueue, CLI11) to download during build;
+#     bloom defaults FETCHCONTENT_FULLY_DISCONNECTED=ON, which breaks builds
+#   - flip on the /usr/bin/rtl wrapper for the packaged build only.
 sed -i 's|-DFETCHCONTENT_FULLY_DISCONNECTED=ON|-DFETCHCONTENT_FULLY_DISCONNECTED=OFF|g' \
   debian/rules || true
-# If the flag is not present, inject it into the dh_auto_configure override.
-if ! grep -q 'FETCHCONTENT_FULLY_DISCONNECTED' debian/rules; then
-  printf '\noverride_dh_auto_configure:\n\tdh_auto_configure -- -DFETCHCONTENT_FULLY_DISCONNECTED=OFF\n' >> debian/rules
-fi
+printf '\noverride_dh_auto_configure:\n\tdh_auto_configure -- -DFETCHCONTENT_FULLY_DISCONNECTED=OFF -DRTL_INSTALL_WRAPPER=ON\n' \
+  >> debian/rules
 
 fakeroot debian/rules binary
 

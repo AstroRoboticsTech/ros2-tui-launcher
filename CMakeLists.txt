@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(ros2_tui_launcher VERSION 0.1.0 LANGUAGES CXX)
+project(ros2_tui_launcher VERSION 0.2.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -7,6 +7,10 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # ── Options ──────────────────────────────────────────────────────────────────
 option(RTL_BUILD_TESTS "Build unit tests" OFF)
+# Install the /usr/bin/rtl wrapper. Only enabled when building the Debian
+# package — overlay/devel builds skip it to avoid clobbering an apt-installed
+# /usr/bin/rtl. The packaging Dockerfile sets this ON via -DRTL_INSTALL_WRAPPER=ON.
+option(RTL_INSTALL_WRAPPER "Install /usr/bin/rtl wrapper (packaging only)" OFF)
 
 # ── ROS 2 Dependencies ──────────────────────────────────────────────────────
 find_package(ament_cmake REQUIRED)
@@ -37,6 +41,18 @@ set(FTXUI_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(FTXUI_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(FTXUI_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(ftxui)
+
+# CLI11 — header-only, command-line parser with first-class subcommand support
+FetchContent_Declare(CLI11
+  GIT_REPOSITORY https://github.com/CLIUtils/CLI11.git
+  GIT_TAG        v2.4.2
+  GIT_SHALLOW    TRUE
+)
+set(CLI11_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+set(CLI11_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(CLI11_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(CLI11_INSTALL OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(CLI11)
 
 # yaml-cpp
 find_package(yaml-cpp 0.7 QUIET)
@@ -98,6 +114,9 @@ add_library(ros2_tui_launcher_core STATIC
   src/system_monitor.cpp
   src/config_validator.cpp
   src/log_writer.cpp
+  src/graph_inspector.cpp
+  src/profile_generator.cpp
+  src/host_process_lookup.cpp
 )
 target_include_directories(ros2_tui_launcher_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -133,6 +152,7 @@ add_library(ros2_tui_launcher_tui STATIC
   app/screens/topic_screen.cpp
   app/screens/node_screen.cpp
   app/screens/parameter_screen.cpp
+  app/screens/create_screen.cpp
 )
 target_include_directories(ros2_tui_launcher_tui PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/app>
@@ -147,7 +167,7 @@ target_link_libraries(ros2_tui_launcher_tui PUBLIC
 
 # ── Executable ───────────────────────────────────────────────────────────────
 add_executable(ros2-tui-launcher app/main.cpp)
-target_link_libraries(ros2-tui-launcher ros2_tui_launcher_tui)
+target_link_libraries(ros2-tui-launcher ros2_tui_launcher_tui CLI11::CLI11)
 
 # ── Install ──────────────────────────────────────────────────────────────────
 install(TARGETS ros2-tui-launcher DESTINATION lib/${PROJECT_NAME})
@@ -156,20 +176,23 @@ install(DIRECTORY include/ DESTINATION include)
 
 # Short-name wrapper installed system-wide at /usr/bin/rtl. Wrapper auto-sources
 # the ROS overlay when invoked from a shell that has not, so users can call
-# `rtl --config ...` directly after `apt install`.
-if(NOT DEFINED RTL_ROS_DISTRO)
-  if(DEFINED ENV{ROS_DISTRO})
-    set(RTL_ROS_DISTRO $ENV{ROS_DISTRO})
-  else()
-    set(RTL_ROS_DISTRO "jazzy")
+# `rtl --config ...` directly after `apt install`. Gated so overlay/devel
+# colcon builds do not try to clobber an apt-installed /usr/bin/rtl.
+if(RTL_INSTALL_WRAPPER)
+  if(NOT DEFINED RTL_ROS_DISTRO)
+    if(DEFINED ENV{ROS_DISTRO})
+      set(RTL_ROS_DISTRO $ENV{ROS_DISTRO})
+    else()
+      set(RTL_ROS_DISTRO "jazzy")
+    endif()
   endif()
+  set(RTL_INSTALL_PREFIX "${CMAKE_INSTALL_PREFIX}")
+  configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/app/rtl.in
+    ${CMAKE_CURRENT_BINARY_DIR}/rtl
+    @ONLY
+  )
+  install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/rtl DESTINATION /usr/bin)
 endif()
-set(RTL_INSTALL_PREFIX "${CMAKE_INSTALL_PREFIX}")
-configure_file(
-  ${CMAKE_CURRENT_SOURCE_DIR}/app/rtl.in
-  ${CMAKE_CURRENT_BINARY_DIR}/rtl
-  @ONLY
-)
-install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/rtl DESTINATION /usr/bin)
 
 ament_package()

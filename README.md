@@ -15,7 +15,7 @@ Grab the latest `.deb` from the [releases page](https://github.com/franklinselva
 then install with `apt` so runtime dependencies resolve automatically:
 
 ```bash
-VERSION=0.1.0
+VERSION=0.2.0
 curl -fsSLO "https://github.com/franklinselva/ros2-tui-launcher/releases/download/v${VERSION}/ros-jazzy-ros2-tui-launcher_${VERSION}-0noble_amd64.deb"
 sudo apt install "./ros-jazzy-ros2-tui-launcher_${VERSION}-0noble_amd64.deb"
 ```
@@ -33,13 +33,66 @@ sudo apt remove ros-jazzy-ros2-tui-launcher
 
 ```bash
 rtl --help
+rtl --version
+
+# Launch the TUI (default subcommand)
+rtl
 
 # Load every profile YAML in a directory
-rtl --profiles /usr/share/ros2_tui_launcher/config/profiles
+rtl tui --profiles /usr/share/ros2_tui_launcher/config/profiles
 
-# Load one specific profile file
-rtl --config my-profile.yaml
+# Load one specific profile file (long form)
+rtl tui --config my-profile.yaml
+
+# Shorthand: open this file directly in the TUI
+rtl config my-profile.yaml
 ```
+
+### Subcommands
+
+```
+rtl                                Launch the TUI with profiles from .
+rtl tui [--profiles DIR | --config FILE]
+                                   Explicit launch
+rtl config <FILE.yaml>             Open FILE in the TUI
+rtl config generate [opts]         Scaffold a profile from the running ROS 2 graph
+rtl config new                     Open the interactive Create screen
+rtl config validate <FILE>         Schema-check a profile YAML
+rtl config list [--profiles DIR]   List profiles found in a directory
+```
+
+### Generate profiles from a live ROS 2 graph
+
+`rtl config generate` introspects the running ROS 2 daemon, observes published
+topics for a few seconds, and emits a launch-profile YAML scaffold:
+
+```bash
+# Print to stdout
+rtl config generate --sample-seconds 4
+
+# Write to a file and open it in the TUI immediately
+rtl config generate --output my-graph.yaml --launch
+```
+
+For an interactive flow with checkboxes per discovered node/topic and inline
+package/executable editing, use the Create screen:
+
+```bash
+rtl config new          # opens straight into the [C]reate screen
+```
+
+The generator captures:
+
+- one launch entry per discovered node. `package` and `executable` are
+  best-effort inferred by scanning `/proc/*/cmdline` for ROS 2 install paths
+  (e.g. `/opt/ros/<distro>/lib/<pkg>/<exe>` or `install/<pkg>/lib/<pkg>/<exe>`).
+  Falls back to `<FILL>` placeholders when the node is remote, runs in a
+  container with a different `/proc`, or was started via a non-matching path;
+- one `monitored_topics` entry per active topic, with the measured publish
+  rate pre-populated (sampled over 2–3 s).
+
+Anything after `--ros-args` is forwarded verbatim to rclcpp (use this if you
+need to override `ROS_DOMAIN_ID`, set parameter overrides, etc.).
 
 Bundled example profiles ship under `/usr/share/ros2_tui_launcher/config/profiles/`
 (talker/listener, lifecycle nodes, turtlesim, multi-node).
@@ -53,6 +106,7 @@ Bundled example profiles ship under `/usr/share/ros2_tui_launcher/config/profile
 | `T` | Topics — live rate/bandwidth/type inspection |
 | `N` | Nodes — graph view, publishers/subscribers/services |
 | `P` | Parameters — list and edit node parameters |
+| `C` | Create — scaffold a profile from the live ROS 2 graph |
 | `Q` | Quit |
 
 Mouse, arrow-key navigation, and incremental search work on every list view.
@@ -90,7 +144,7 @@ cd ~/rtl_ws
 source /opt/ros/jazzy/setup.bash
 colcon build --packages-select ros2_tui_launcher --symlink-install
 source install/setup.bash
-rtl --profiles src/ros2-tui-launcher/config/profiles
+ros2 run ros2_tui_launcher ros2-tui-launcher tui --profiles src/ros2-tui-launcher/config/profiles
 ```
 
 System packages required: `libproc2-dev`, `libyaml-cpp-dev`, `libspdlog-dev`,
