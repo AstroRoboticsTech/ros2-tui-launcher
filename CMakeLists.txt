@@ -154,4 +154,22 @@ install(TARGETS ros2-tui-launcher DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY config/ DESTINATION share/${PROJECT_NAME}/config)
 install(DIRECTORY include/ DESTINATION include)
 
+# Short-name wrapper installed system-wide at /usr/bin/rtl. Wrapper auto-sources
+# the ROS overlay when invoked from a shell that has not, so users can call
+# `rtl --config ...` directly after `apt install`.
+if(NOT DEFINED RTL_ROS_DISTRO)
+  if(DEFINED ENV{ROS_DISTRO})
+    set(RTL_ROS_DISTRO $ENV{ROS_DISTRO})
+  else()
+    set(RTL_ROS_DISTRO "jazzy")
+  endif()
+endif()
+set(RTL_INSTALL_PREFIX "${CMAKE_INSTALL_PREFIX}")
+configure_file(
+  ${CMAKE_CURRENT_SOURCE_DIR}/app/rtl.in
+  ${CMAKE_CURRENT_BINARY_DIR}/rtl
+  @ONLY
+)
+install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/rtl DESTINATION /usr/bin)
+
 ament_package()

@@ -1,0 +1,6 @@
+libproc2-dev:
+  ubuntu:
+    noble: [libproc2-dev]
+libproc2-0:
+  ubuntu:
+    noble: [libproc2-0]

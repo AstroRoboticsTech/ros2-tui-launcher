@@ -67,3 +67,16 @@ info:
     @echo "Workspace root: {{ws_root}}"
     @echo "Build type:     {{build_type}}"
     @echo "Justfile dir:   {{justfile_directory()}}"
+
+# ── Packaging (Docker → .deb) ────────────────────────────────────────────────
+
+# Build a Debian package inside a ros:<distro> container. Output: dist/<distro>/*.deb
+deb distro="jazzy":
+    {{justfile_directory()}}/scripts/build-deb.sh {{distro}}
+
+# Convenience alias for jazzy
+deb-jazzy: (deb "jazzy")
+
+# Publish current package.xml version as a GitHub release with the freshly built .deb
+release distro="jazzy": (deb distro)
+    {{justfile_directory()}}/scripts/release.sh {{distro}}

@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# rtl — convenience launcher for ros2-tui-launcher.
+# Auto-sources the ROS overlay if it has not been sourced, then execs the
+# real binary installed under the ROS prefix.
+set -e
+
+if [[ -z "${AMENT_PREFIX_PATH:-}" ]]; then
+  ros_setup="/opt/ros/@RTL_ROS_DISTRO@/setup.bash"
+  if [[ -f "${ros_setup}" ]]; then
+    # shellcheck source=/dev/null
+    source "${ros_setup}"
+  fi
+fi
+
+exec "@RTL_INSTALL_PREFIX@/lib/ros2_tui_launcher/ros2-tui-launcher" "$@"

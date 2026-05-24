@@ -1,0 +1,21 @@
+# Build artifacts
+build/
+install/
+log/
+dist/
+
+# Bloom / debian packaging output
+debian/
+obj-*/
+*.deb
+*.ddeb
+*.buildinfo
+*.changes
+*.dsc
+*.tar.gz
+*.tar.xz
+
+# Editor
+.vscode/
+.idea/
+*.swp
