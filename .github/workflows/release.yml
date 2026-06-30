@@ -37,6 +37,32 @@ jobs:
             exit 1
           fi
 
+      # Guard: tag vX.Y.Z must match package.xml <version> and have a CHANGELOG
+      # section. Building release notes from CHANGELOG.md here also fails fast if
+      # the section is missing, so a release never ships with empty/wrong notes.
+      - name: Verify version and build release notes
+        run: |
+          set -euo pipefail
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION="$(grep -oP '(?<=<version>)[^<]+' package.xml)"
+          if [[ "${TAG_VERSION}" != "${PKG_VERSION}" ]]; then
+            echo "ERROR: tag ${GITHUB_REF_NAME} != package.xml version ${PKG_VERSION}." >&2
+            exit 1
+          fi
+          {
+            ./scripts/changelog-extract.sh "${TAG_VERSION}"
+            echo
+            echo "## Install"
+            echo
+            echo "Download the \`.deb\` for your ROS 2 distro and architecture, then:"
+            echo '```'
+            echo "sudo apt install ./ros-<distro>-ros2-tui-launcher_${TAG_VERSION}-*.deb"
+            echo "source /opt/ros/<distro>/setup.bash"
+            echo "rtl"
+            echo '```'
+          } > release-notes.md
+          echo "OK: version ${TAG_VERSION} matches; notes built from CHANGELOG.md."
+
       - name: Download built .debs
         uses: actions/download-artifact@v4
         with:
@@ -73,8 +99,9 @@ jobs:
           set -euo pipefail
           TAG="${GITHUB_REF_NAME}"
           if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release edit "${TAG}" --repo "${GITHUB_REPOSITORY}" --notes-file release-notes.md
             gh release upload "${TAG}" collected/*.deb --repo "${GITHUB_REPOSITORY}" --clobber
           else
             gh release create "${TAG}" collected/*.deb \
-              --repo "${GITHUB_REPOSITORY}" --title "${TAG}" --generate-notes
+              --repo "${GITHUB_REPOSITORY}" --title "${TAG}" --notes-file release-notes.md
           fi
