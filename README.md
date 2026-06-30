@@ -7,7 +7,11 @@ system/process telemetry, all from one keyboard-driven screen.
 | Distro | Ubuntu | Status |
 | ------ | ------ | ------ |
 | Jazzy  | Noble  | Released |
-| Humble | Jammy  | Planned (procps API differs — not yet ported) |
+| Humble | Jammy  | Released |
+
+System/process monitoring reads `/proc` directly, so there is no `libproc2`/procps
+version dependency — the same code runs on Noble and Jammy. Prebuilt `.deb`s are
+published for both `amd64` and `arm64` (e.g. NVIDIA Jetson) on each distro.
 
 ## Install (Debian package)
 
@@ -15,13 +19,17 @@ Grab the latest `.deb` from the [releases page](https://github.com/franklinselva
 then install with `apt` so runtime dependencies resolve automatically:
 
 ```bash
-VERSION=0.2.0
-curl -fsSLO "https://github.com/franklinselva/ros2-tui-launcher/releases/download/v${VERSION}/ros-jazzy-ros2-tui-launcher_${VERSION}-0noble_amd64.deb"
-sudo apt install "./ros-jazzy-ros2-tui-launcher_${VERSION}-0noble_amd64.deb"
+VERSION=0.3.0
+DISTRO=jazzy                                  # jazzy (Noble) or humble (Jammy)
+ARCH=$(dpkg --print-architecture)             # amd64 or arm64
+CODENAME=$(. /etc/os-release; echo "$UBUNTU_CODENAME")  # noble or jammy
+DEB="ros-${DISTRO}-ros2-tui-launcher_${VERSION}-0${CODENAME}_${ARCH}.deb"
+curl -fsSLO "https://github.com/franklinselva/ros2-tui-launcher/releases/download/v${VERSION}/${DEB}"
+sudo apt install "./${DEB}"
 ```
 
 That installs the wrapper at `/usr/bin/rtl`. No need to source any ROS overlay
-first — the wrapper auto-sources `/opt/ros/jazzy/setup.bash`.
+first — the wrapper auto-sources `/opt/ros/${DISTRO}/setup.bash`.
 
 To uninstall:
 
@@ -147,9 +155,10 @@ source install/setup.bash
 ros2 run ros2_tui_launcher ros2-tui-launcher tui --profiles src/ros2-tui-launcher/config/profiles
 ```
 
-System packages required: `libproc2-dev`, `libyaml-cpp-dev`, `libspdlog-dev`,
-plus a working ROS 2 Jazzy install. FTXUI and SPSCQueue are fetched at
-configure time.
+System packages required: `libyaml-cpp-dev`, `libspdlog-dev`, plus a working
+ROS 2 (Jazzy or Humble) install. FTXUI, CLI11, and SPSCQueue are fetched at
+configure time. Process/system monitoring reads `/proc` directly — no procps
+dev package needed.
 
 ### Building the Debian package locally
 

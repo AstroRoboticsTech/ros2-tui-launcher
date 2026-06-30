@@ -1,83 +1,155 @@
 #include "ros2_tui_launcher/system_monitor.hpp"
 
-#include <libproc2/pids.h>
-#include <libproc2/stat.h>
-#include <libproc2/meminfo.h>
-#include <libproc2/misc.h>
-
 #ifdef RTL_HAS_NVML
 #include <nvml.h>
 #endif
 
 #include <spdlog/spdlog.h>
 
+#include <dirent.h>
+#include <unistd.h>
+
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <sstream>
+#include <string_view>
+#include <vector>
 #include <algorithm>
+#include <cctype>
+#include <filesystem>
 
 namespace rtl {
 
-// Items we query from libproc2 for each process
-enum PidsIdx {
-    PI_PID = 0,
-    PI_PPID,
-    PI_CMD,
-    PI_TICS_ALL,
-    PI_VM_RSS,
-    PI_STATE,
-    PI_COUNT
+namespace {
+
+// Read an entire (small) sysfs/procfs file and trim surrounding whitespace and
+// trailing NULs (device-tree strings are NUL-terminated).
+std::string readTrim(const std::string& path) {
+    std::ifstream f(path);
+    if (!f) return {};
+    std::stringstream ss;
+    ss << f.rdbuf();
+    std::string s = ss.str();
+    auto is_junk = [](char c) {
+        return c == '\0' || c == '\n' || c == '\r' || std::isspace(static_cast<unsigned char>(c));
+    };
+    while (!s.empty() && is_junk(s.back())) s.pop_back();
+    std::size_t start = 0;
+    while (start < s.size() && is_junk(s[start])) ++start;
+    return s.substr(start);
+}
+
+// Jetson/Tegra boards always ship this file (L4T release manifest).
+bool isJetson() {
+    std::error_code ec;
+    return std::filesystem::exists("/etc/nv_tegra_release", ec);
+}
+
+// Locate the integrated-GPU load file. Path differs by SoC generation
+// (gpu.0 on older L4T, <addr>.gpu on Orin/Xavier), so probe then scan.
+std::string findTegraLoadPath() {
+    if (std::filesystem::exists("/sys/devices/platform/gpu.0/load"))
+        return "/sys/devices/platform/gpu.0/load";
+    std::error_code ec;
+    for (const auto& entry :
+         std::filesystem::directory_iterator("/sys/devices/platform", ec)) {
+        const std::string name = entry.path().filename().string();
+        if (name.size() >= 4 && name.substr(name.size() - 4) == ".gpu") {
+            auto candidate = entry.path() / "load";
+            if (std::filesystem::exists(candidate)) return candidate.string();
+        }
+    }
+    return {};
+}
+
+// Find the thermal zone whose `type` mentions the GPU (e.g. "gpu-thermal" on
+// Orin, "GPU-therm" on older JetPacks). Returns its `temp` file path.
+std::string findTegraTempPath() {
+    std::error_code ec;
+    for (const auto& entry :
+         std::filesystem::directory_iterator("/sys/class/thermal", ec)) {
+        const std::string name = entry.path().filename().string();
+        if (name.rfind("thermal_zone", 0) != 0) continue;
+        std::string type = readTrim((entry.path() / "type").string());
+        std::transform(type.begin(), type.end(), type.begin(),
+                       [](unsigned char c) { return std::tolower(c); });
+        if (type.find("gpu") != std::string::npos)
+            return (entry.path() / "temp").string();
+    }
+    return {};
+}
+
+}  // namespace
+
+namespace {
+
+// Page size in KiB, for converting /proc/<pid>/stat RSS (in pages) to KiB.
+const long kPageSizeKb = sysconf(_SC_PAGESIZE) / 1024;
+
+// Parsed subset of /proc/<pid>/stat that we care about.
+struct ProcStat {
+    pid_t ppid = 0;
+    char state = '?';
+    unsigned long long tics = 0;   // utime + stime, in clock ticks
+    unsigned long rss_kb = 0;
+    std::string comm;
 };
 
-static enum pids_item pids_items[] = {
-    PIDS_ID_PID,       // s_int
-    PIDS_ID_PPID,      // s_int
-    PIDS_CMD,          // str
-    PIDS_TICS_ALL,     // ull_int
-    PIDS_VM_RSS,       // ul_int  (KiB)
-    PIDS_STATE,        // s_ch
-};
+// Parse /proc/<pid>/stat. The comm field (2) is wrapped in parentheses and may
+// itself contain spaces or ')', so split on the LAST ')' and index the numeric
+// tail from field 3 onward. Returns false if the file can't be read/parsed.
+bool parseProcStat(pid_t pid, ProcStat& out) {
+    std::string path = "/proc/" + std::to_string(pid) + "/stat";
+    std::ifstream f(path);
+    if (!f) return false;
+    std::string line;
+    std::getline(f, line);
+    if (line.empty()) return false;
+
+    auto open_paren = line.find('(');
+    auto close_paren = line.rfind(')');
+    if (open_paren == std::string::npos || close_paren == std::string::npos ||
+        close_paren < open_paren)
+        return false;
+
+    out.comm = line.substr(open_paren + 1, close_paren - open_paren - 1);
+
+    // Tokenize everything after ") " — these are fields 3..N.
+    std::vector<std::string> t;
+    t.reserve(52);
+    std::istringstream iss(line.substr(close_paren + 1));
+    for (std::string tok; iss >> tok;) t.push_back(std::move(tok));
+
+    // Field N maps to t[N-3]. Need state(3), ppid(4), utime(14), stime(15), rss(24).
+    if (t.size() < 22) return false;
+    out.state = t[0].empty() ? '?' : t[0][0];
+    try {
+        out.ppid = static_cast<pid_t>(std::stol(t[1]));
+        unsigned long long utime = std::stoull(t[11]);
+        unsigned long long stime = std::stoull(t[12]);
+        out.tics = utime + stime;
+        unsigned long rss_pages = std::stoul(t[21]);
+        out.rss_kb = rss_pages * static_cast<unsigned long>(kPageSizeKb);
+    } catch (...) {
+        return false;
+    }
+    return true;
+}
+
+}  // namespace
 
 SystemMonitor::SystemMonitor() {
-    hertz_ = procps_hertz_get();
-    num_cpus_ = procps_cpu_count();
+    hertz_ = sysconf(_SC_CLK_TCK);
+    num_cpus_ = sysconf(_SC_NPROCESSORS_ONLN);
     if (hertz_ <= 0) hertz_ = 100;
     if (num_cpus_ <= 0) num_cpus_ = 1;
-
-    // Init libproc2 handles
-    if (procps_pids_new(reinterpret_cast<struct pids_info**>(&pids_handle_),
-                        pids_items, PI_COUNT) < 0) {
-        spdlog::error("SystemMonitor: failed to init pids");
-        pids_handle_ = nullptr;
-    }
-
-    if (procps_stat_new(reinterpret_cast<struct stat_info**>(&stat_handle_)) < 0) {
-        spdlog::error("SystemMonitor: failed to init stat");
-        stat_handle_ = nullptr;
-    }
-
-    if (procps_meminfo_new(reinterpret_cast<struct meminfo_info**>(&mem_handle_)) < 0) {
-        spdlog::error("SystemMonitor: failed to init meminfo");
-        mem_handle_ = nullptr;
-    }
 
     detectSystemInfo();
 }
 
 SystemMonitor::~SystemMonitor() {
-    if (pids_handle_) {
-        auto p = reinterpret_cast<struct pids_info**>(&pids_handle_);
-        procps_pids_unref(p);
-    }
-    if (stat_handle_) {
-        auto p = reinterpret_cast<struct stat_info**>(&stat_handle_);
-        procps_stat_unref(p);
-    }
-    if (mem_handle_) {
-        auto p = reinterpret_cast<struct meminfo_info**>(&mem_handle_);
-        procps_meminfo_unref(p);
-    }
 #ifdef RTL_HAS_NVML
     if (nvml_initialized_) {
         nvmlShutdown();
@@ -111,9 +183,28 @@ void SystemMonitor::detectSystemInfo() {
     cached_system_.cpu_cores = physical_ids > 0 ? physical_ids : static_cast<int>(num_cpus_);
     cached_system_.cpu_threads = static_cast<int>(num_cpus_);
 
-    // GPU detection — prefer NVML, fall back to nvidia-smi with timeout
+    // GPU detection — on Jetson/Tegra the integrated GPU has no usable NVML and
+    // nvidia-smi reports N/A, so read sysfs directly. This takes priority.
+    if (isJetson()) {
+        tegra_load_path_ = findTegraLoadPath();
+        tegra_temp_path_ = findTegraTempPath();
+        if (!tegra_load_path_.empty()) {
+            tegra_gpu_ = true;
+            cached_system_.has_gpu = true;
+            std::string model = readTrim("/proc/device-tree/model");
+            cached_system_.gpu_name = model.empty() ? "Jetson iGPU" : model + " (iGPU)";
+            // Integrated GPU shares system RAM (unified memory). Mirror total now;
+            // used is refreshed alongside system memory in refreshGpu().
+            cached_system_.gpu_mem_total_mb = cached_system_.mem_total_kb / 1024;
+            spdlog::info("SystemMonitor: Tegra GPU via sysfs (load={}, temp={})",
+                         tegra_load_path_,
+                         tegra_temp_path_.empty() ? "n/a" : tegra_temp_path_);
+        }
+    }
+
+    // prefer NVML, fall back to nvidia-smi with timeout
 #ifdef RTL_HAS_NVML
-    if (nvmlInit_v2() == NVML_SUCCESS) {
+    if (!tegra_gpu_ && nvmlInit_v2() == NVML_SUCCESS) {
         nvmlDevice_t device;
         if (nvmlDeviceGetHandleByIndex(0, &device) == NVML_SUCCESS) {
             nvml_initialized_ = true;
@@ -135,8 +226,8 @@ void SystemMonitor::detectSystemInfo() {
     }
 #endif
 
-    // Fallback: nvidia-smi with timeout (only if NVML unavailable)
-    if (!nvml_initialized_) {
+    // Fallback: nvidia-smi with timeout (only if NVML and Tegra unavailable)
+    if (!tegra_gpu_ && !nvml_initialized_) {
         FILE* fp = popen("timeout 2 nvidia-smi --query-gpu=name,memory.total "
                          "--format=csv,noheader,nounits 2>/dev/null", "r");
         if (fp) {
@@ -184,14 +275,11 @@ void SystemMonitor::refresh() {
 }
 
 void SystemMonitor::refreshProcesses() {
-    if (!pids_handle_) return;
+    // Enumerate numeric entries in /proc — one directory per live PID.
+    DIR* proc = opendir("/proc");
+    if (!proc) return;
 
-    auto handle = reinterpret_cast<struct pids_info*>(pids_handle_);
-    struct pids_fetch* fetched = procps_pids_reap(handle, PIDS_FETCH_TASKS_ONLY);
-    if (!fetched) return;
-
-    // Use the delta_total computed by refreshSystemCpu() (called first)
-    // This avoids a second procps_stat_get() call which would corrupt the deltas.
+    // Use the delta_total computed by refreshSystemCpu() (called first).
     unsigned long long delta_total;
     {
         std::lock_guard lock(mutex_);
@@ -203,36 +291,42 @@ void SystemMonitor::refreshProcesses() {
     std::unordered_map<pid_t, ProcessStats> new_procs;
     std::unordered_map<pid_t, unsigned long long> new_ticks;
 
-    for (int i = 0; i < fetched->counts->total; ++i) {
-        struct pids_stack* stack = fetched->stacks[i];
+    struct dirent* ent;
+    while ((ent = readdir(proc)) != nullptr) {
+        // Skip non-numeric names (only /proc/<pid> dirs interest us).
+        if (ent->d_name[0] < '0' || ent->d_name[0] > '9') continue;
+        pid_t pid = static_cast<pid_t>(std::atol(ent->d_name));
+        if (pid <= 0) continue;
+
+        ProcStat st;
+        if (!parseProcStat(pid, st)) continue;   // process likely exited mid-scan
 
         ProcessStats ps;
-        ps.pid = PIDS_VAL(PI_PID, s_int, stack, handle);
-        ps.ppid = PIDS_VAL(PI_PPID, s_int, stack, handle);
-        const char* cmd = PIDS_VAL(PI_CMD, str, stack, handle);
-        ps.comm = cmd ? cmd : "";
-        unsigned long long tics = PIDS_VAL(PI_TICS_ALL, ull_int, stack, handle);
-        ps.mem_rss_kb = PIDS_VAL(PI_VM_RSS, ul_int, stack, handle);
-        ps.state = PIDS_VAL(PI_STATE, s_ch, stack, handle);
+        ps.pid = pid;
+        ps.ppid = st.ppid;
+        ps.comm = st.comm;
+        ps.mem_rss_kb = st.rss_kb;
+        ps.state = st.state;
 
-        // CPU% = delta_proc_ticks / delta_total_ticks * 100
-        auto prev_it = prev_proc_ticks_.find(ps.pid);
+        // CPU% = delta_proc_ticks / delta_total_ticks * 100 * num_cpus
+        auto prev_it = prev_proc_ticks_.find(pid);
         if (prev_it != prev_proc_ticks_.end() && delta_total > 0) {
-            unsigned long long delta_proc = tics - prev_it->second;
+            unsigned long long delta_proc = st.tics - prev_it->second;
             ps.cpu_percent = static_cast<double>(delta_proc) / static_cast<double>(delta_total) * 100.0 * num_cpus_;
             if (ps.cpu_percent > 100.0 * num_cpus_) ps.cpu_percent = 100.0 * num_cpus_;
             if (ps.cpu_percent < 0.0) ps.cpu_percent = 0.0;
         }
 
         // Attach GPU memory if available
-        auto gpu_it = gpu_proc_mem_.find(ps.pid);
+        auto gpu_it = gpu_proc_mem_.find(pid);
         if (gpu_it != gpu_proc_mem_.end()) {
             ps.gpu_mem_mb = gpu_it->second;
         }
 
-        new_ticks[ps.pid] = tics;
-        new_procs[ps.pid] = std::move(ps);
+        new_ticks[pid] = st.tics;
+        new_procs[pid] = std::move(ps);
     }
+    closedir(proc);
 
     cached_procs_ = std::move(new_procs);
     prev_proc_ticks_ = std::move(new_ticks);
@@ -248,21 +342,24 @@ void SystemMonitor::refreshProcesses() {
 }
 
 void SystemMonitor::refreshSystemCpu() {
-    if (!stat_handle_) return;
+    // First line of /proc/stat: "cpu  user nice system idle iowait irq softirq
+    // steal guest guest_nice". guest/guest_nice are already counted in user/nice,
+    // so summing the first 8 columns gives total without double-counting.
+    std::ifstream f("/proc/stat");
+    if (!f) return;
+    std::string cpu_label;
+    f >> cpu_label;
+    if (cpu_label != "cpu") return;
 
-    auto sh = reinterpret_cast<struct stat_info*>(stat_handle_);
+    unsigned long long vals[8] = {0};
+    int n = 0;
+    for (; n < 8 && (f >> vals[n]); ++n) {}
+    if (n < 4) return;  // need at least user/nice/system/idle
 
-    // Use select() to read multiple items at once — get() returns the same
-    // value for every enum, so it's broken for multi-item queries.
-    enum stat_item items[] = {
-        STAT_TIC_SUM_TOTAL,    // [0] ull_int
-        STAT_TIC_SUM_BUSY,     // [1] ull_int
-    };
-    auto stack = procps_stat_select(sh, items, 2);
-    if (!stack) return;
-
-    unsigned long long total_ticks = stack->head[0].result.ull_int;
-    unsigned long long busy_ticks  = stack->head[1].result.ull_int;
+    unsigned long long idle_all = vals[3] + vals[4];  // idle + iowait
+    unsigned long long total_ticks = 0;
+    for (int i = 0; i < n; ++i) total_ticks += vals[i];
+    unsigned long long busy_ticks = total_ticks - idle_all;
 
     unsigned long long delta_total = total_ticks - prev_total_ticks_;
     unsigned long long delta_busy = busy_ticks - prev_busy_ticks_;
@@ -283,26 +380,70 @@ void SystemMonitor::refreshSystemCpu() {
 }
 
 void SystemMonitor::refreshSystemMem() {
-    if (!mem_handle_) return;
+    std::ifstream f("/proc/meminfo");
+    if (!f) return;
 
-    auto mh = reinterpret_cast<struct meminfo_info*>(mem_handle_);
+    unsigned long total = 0, free_kb = 0, avail = 0, buffers = 0,
+                  cached = 0, sreclaim = 0, shmem = 0;
+    bool have_avail = false;
+    std::string key;
+    unsigned long val;
+    std::string unit;
+    while (f >> key >> val >> unit) {
+        if (key == "MemTotal:")          total = val;
+        else if (key == "MemFree:")      free_kb = val;
+        else if (key == "MemAvailable:") { avail = val; have_avail = true; }
+        else if (key == "Buffers:")      buffers = val;
+        else if (key == "Cached:")       cached = val;
+        else if (key == "SReclaimable:") sreclaim = val;
+        else if (key == "Shmem:")        shmem = val;
+    }
 
-    // Use select() — get() returns the same value for every enum.
-    enum meminfo_item items[] = {
-        MEMINFO_MEM_TOTAL,      // [0] ul_int
-        MEMINFO_MEM_USED,       // [1] ul_int
-        MEMINFO_MEM_AVAILABLE,  // [2] ul_int
-    };
-    auto stack = procps_meminfo_select(mh, items, 3);
-    if (!stack) return;
+    // procps (and the prior libproc2 path) define used = MemTotal - MemAvailable,
+    // which counts reclaimable cache/buffers as free. Match that exactly. On very
+    // old kernels without MemAvailable, fall back to the classic free(1) estimate.
+    unsigned long used;
+    if (have_avail) {
+        used = (total > avail) ? (total - avail) : 0;
+    } else {
+        unsigned long cache_total = cached + sreclaim;
+        if (cache_total >= shmem) cache_total -= shmem; else cache_total = 0;
+        unsigned long non_used = free_kb + buffers + cache_total;
+        used = (total > non_used) ? (total - non_used) : 0;
+        avail = free_kb + buffers + cache_total;
+    }
 
     std::lock_guard lock(mutex_);
-    cached_system_.mem_total_kb     = stack->head[0].result.ul_int;
-    cached_system_.mem_used_kb      = stack->head[1].result.ul_int;
-    cached_system_.mem_available_kb = stack->head[2].result.ul_int;
+    cached_system_.mem_total_kb     = total;
+    cached_system_.mem_used_kb      = used;
+    cached_system_.mem_available_kb = avail;
 }
 
 void SystemMonitor::refreshGpu() {
+    // Tegra/Jetson: integrated GPU stats from sysfs (no fork, no NVML).
+    if (tegra_gpu_) {
+        std::string load_raw = readTrim(tegra_load_path_);
+        std::string temp_raw = tegra_temp_path_.empty() ? "" : readTrim(tegra_temp_path_);
+        std::lock_guard lock(mutex_);
+        if (!load_raw.empty()) {
+            try {
+                // sysfs load is per-mille (0..1000) → percent.
+                cached_system_.gpu_utilization =
+                    std::clamp(std::stod(load_raw) / 10.0, 0.0, 100.0);
+            } catch (...) {}
+        }
+        if (!temp_raw.empty()) {
+            try {
+                cached_system_.gpu_temp_c = std::stod(temp_raw) / 1000.0;
+            } catch (...) {}
+        }
+        // Unified memory: GPU "VRAM" is system RAM.
+        cached_system_.gpu_mem_total_mb = cached_system_.mem_total_kb / 1024;
+        cached_system_.gpu_mem_used_mb = cached_system_.mem_used_kb / 1024;
+        // Per-process GPU memory is not exposed without NVML on Tegra.
+        return;
+    }
+
 #ifdef RTL_HAS_NVML
     if (nvml_initialized_) {
         auto device = reinterpret_cast<nvmlDevice_t>(nvml_device_);

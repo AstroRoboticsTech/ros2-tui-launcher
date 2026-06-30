@@ -1,0 +1,57 @@
+# Reusable build/validate matrix. Builds the .deb natively for each
+# distro × architecture (no QEMU, no docker-in-docker) inside the
+# ros:<distro>-ros-base image, validates it, smoke-tests an install, and uploads
+# it as an artifact. Called by ci.yml (push/PR) and release.yml (tags).
+# Runnable locally with `act`.
+name: build-debs
+
+on:
+  workflow_call:
+
+jobs:
+  package:
+    name: ${{ matrix.distro }}/${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    container: ros:${{ matrix.distro }}-ros-base
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { distro: jazzy,  arch: amd64, runner: ubuntu-24.04 }
+          - { distro: jazzy,  arch: arm64, runner: ubuntu-24.04-arm }
+          - { distro: humble, arch: amd64, runner: ubuntu-24.04 }
+          - { distro: humble, arch: arm64, runner: ubuntu-24.04-arm }
+    steps:
+      # Packaging toolchain. Keep in sync with packaging/Dockerfile.
+      - name: Install packaging toolchain
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential cmake git pkg-config ca-certificates \
+            fakeroot debhelper dh-make devscripts \
+            python3-bloom python3-rosdep \
+            libyaml-cpp-dev libspdlog-dev lsb-release
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build .deb
+        run: ROS_DISTRO=${{ matrix.distro }} OUT_DIR="$PWD/dist/${{ matrix.distro }}" ./scripts/build-deb-steps.sh
+
+      - name: Validate .deb (static)
+        run: ./scripts/validate-deb.sh ${{ matrix.distro }} ${{ matrix.arch }}
+
+      - name: Smoke test (install + run)
+        run: |
+          apt-get install -y ./dist/${{ matrix.distro }}/*.deb
+          rtl --version
+
+      # Skipped under `act` (its container jobs lack node for JS actions — see
+      # nektos/act#107); runs normally on GitHub-hosted runners.
+      - name: Upload artifact
+        if: ${{ !env.ACT }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: deb-${{ matrix.distro }}-${{ matrix.arch }}
+          path: dist/${{ matrix.distro }}/*.deb
+          if-no-files-found: error

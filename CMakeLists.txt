@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(ros2_tui_launcher VERSION 0.2.0 LANGUAGES CXX)
+project(ros2_tui_launcher VERSION 0.3.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -78,9 +78,13 @@ if(NOT spdlog_FOUND)
   FetchContent_MakeAvailable(spdlog)
 endif()
 
-# libproc2 (procps-ng) for system/process monitoring
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(LIBPROC2 REQUIRED libproc2)
+# Normalize the yaml-cpp target across distros: yaml-cpp 0.7 (Jammy / Humble)
+# exports the plain `yaml-cpp` target, while 0.8 (Noble / Jazzy and the
+# FetchContent fallback) exports the namespaced `yaml-cpp::yaml-cpp`. Alias so the
+# rest of the file can always link `yaml-cpp::yaml-cpp`.
+if(TARGET yaml-cpp AND NOT TARGET yaml-cpp::yaml-cpp)
+  add_library(yaml-cpp::yaml-cpp ALIAS yaml-cpp)
+endif()
 
 # NVML (NVIDIA Management Library) — optional, for GPU monitoring without popen
 find_library(NVML_LIBRARY nvidia-ml PATHS
@@ -122,14 +126,10 @@ target_include_directories(ros2_tui_launcher_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
 )
-target_include_directories(ros2_tui_launcher_core PUBLIC
-  ${LIBPROC2_INCLUDE_DIRS}
-)
 target_link_libraries(ros2_tui_launcher_core PUBLIC
   yaml-cpp::yaml-cpp
   spdlog::spdlog
   SPSCQueue
-  ${LIBPROC2_LIBRARIES}
 )
 if(HAVE_NVML)
   target_include_directories(ros2_tui_launcher_core PRIVATE ${NVML_INCLUDE_DIR})

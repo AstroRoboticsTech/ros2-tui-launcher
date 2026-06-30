@@ -18,29 +18,36 @@ fi
 
 TAG="v${VERSION}"
 shopt -s nullglob
-debs=("${DIST_DIR}"/ros-"${ROS_DISTRO}"-ros2-tui-launcher_"${VERSION}"-*_amd64.deb)
+# Match any architecture (amd64, arm64, …) — collect every per-arch deb present.
+debs=("${DIST_DIR}"/ros-"${ROS_DISTRO}"-ros2-tui-launcher_"${VERSION}"-*_*.deb)
 if [[ ${#debs[@]} -eq 0 ]]; then
   echo "ERROR: no .deb matching version ${VERSION} in ${DIST_DIR}." >&2
   echo "       Run 'just deb ${ROS_DISTRO}' first." >&2
   exit 1
 fi
 
+echo ">> Uploading ${#debs[@]} asset(s):"
+printf '   %s\n' "${debs[@]##*/}"
+
 cd "${REPO_ROOT}"
 
+# Release notes: the CHANGELOG.md section for this version + install snippet.
+# Same source of truth the CI publish step uses.
+NOTES_FILE="$(mktemp)"
+trap 'rm -f "${NOTES_FILE}"' EXIT
+{
+  "${REPO_ROOT}/scripts/changelog-extract.sh" "${VERSION}"
+  printf '\n## Install\n\n```\nsudo apt install ./ros-%s-ros2-tui-launcher_%s-*.deb\nsource /opt/ros/%s/setup.bash\nrtl\n```\n' \
+    "${ROS_DISTRO}" "${VERSION}" "${ROS_DISTRO}"
+} > "${NOTES_FILE}"
+
 if gh release view "${TAG}" >/dev/null 2>&1; then
-  echo ">> Release ${TAG} exists — uploading (clobber) assets"
+  echo ">> Release ${TAG} exists — updating notes and uploading (clobber) assets"
+  gh release edit "${TAG}" --notes-file "${NOTES_FILE}"
   gh release upload "${TAG}" "${debs[@]}" --clobber
 else
   echo ">> Creating release ${TAG}"
-  NOTES="Automated build of ${TAG} for ROS 2 ${ROS_DISTRO} (Ubuntu $(case ${ROS_DISTRO} in jazzy) echo noble;; humble) echo jammy;; *) echo unknown;; esac)).
-
-Install:
-\`\`\`
-sudo apt install ./ros-${ROS_DISTRO}-ros2-tui-launcher_${VERSION}-*.deb
-source /opt/ros/${ROS_DISTRO}/setup.bash
-ros2 run ros2_tui_launcher ros2-tui-launcher
-\`\`\`"
-  gh release create "${TAG}" "${debs[@]}" --title "${TAG}" --notes "${NOTES}"
+  gh release create "${TAG}" "${debs[@]}" --title "${TAG}" --notes-file "${NOTES_FILE}"
 fi
 
 echo ">> Done. Release URL:"

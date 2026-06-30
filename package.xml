@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>ros2_tui_launcher</name>
-  <version>0.2.0</version>
+  <version>0.3.0</version>
   <description>FTXUI-based TUI for launching, monitoring, and managing ROS 2 nodes</description>
   <maintainer email="selvakumar@todo.com">Selvakumar</maintainer>
   <license>MIT</license>
@@ -16,8 +16,6 @@
 
   <depend>yaml-cpp</depend>
   <depend>spdlog</depend>
-  <build_depend>libproc2-dev</build_depend>
-  <exec_depend>libproc2-0</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

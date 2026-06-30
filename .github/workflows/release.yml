@@ -1,0 +1,107 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  # Build + validate every distro × arch (reuses the CI matrix). Artifacts only
+  # exist if validation and the install smoke-test passed, so a broken build
+  # cannot publish.
+  build:
+    uses: ./.github/workflows/_build.yml
+
+  publish:
+    needs: build
+    # Only ever publish from a pushed tag (never a branch workflow_dispatch).
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout (full history, for the main-branch guard)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Guard: the tagged commit must be on main, otherwise refuse to release.
+      - name: Ensure tag is on main
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          if git merge-base --is-ancestor "${GITHUB_SHA}" origin/main; then
+            echo "OK: ${GITHUB_REF_NAME} (${GITHUB_SHA}) is on main."
+          else
+            echo "ERROR: tag ${GITHUB_REF_NAME} is not on the main branch; refusing to release." >&2
+            exit 1
+          fi
+
+      # Guard: tag vX.Y.Z must match package.xml <version> and have a CHANGELOG
+      # section. Building release notes from CHANGELOG.md here also fails fast if
+      # the section is missing, so a release never ships with empty/wrong notes.
+      - name: Verify version and build release notes
+        run: |
+          set -euo pipefail
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION="$(grep -oP '(?<=<version>)[^<]+' package.xml)"
+          if [[ "${TAG_VERSION}" != "${PKG_VERSION}" ]]; then
+            echo "ERROR: tag ${GITHUB_REF_NAME} != package.xml version ${PKG_VERSION}." >&2
+            exit 1
+          fi
+          {
+            ./scripts/changelog-extract.sh "${TAG_VERSION}"
+            echo
+            echo "## Install"
+            echo
+            echo "Download the \`.deb\` for your ROS 2 distro and architecture, then:"
+            echo '```'
+            echo "sudo apt install ./ros-<distro>-ros2-tui-launcher_${TAG_VERSION}-*.deb"
+            echo "source /opt/ros/<distro>/setup.bash"
+            echo "rtl"
+            echo '```'
+          } > release-notes.md
+          echo "OK: version ${TAG_VERSION} matches; notes built from CHANGELOG.md."
+
+      - name: Download built .debs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: deb-*
+          path: artifacts
+          merge-multiple: true
+
+      # Final gate before the release page: confirm both architectures are present
+      # and each deb carries the matching ROS runtime dep, else fail without publishing.
+      - name: Verify release assets
+        run: |
+          set -euo pipefail
+          mkdir -p collected
+          find artifacts -name '*.deb' -exec cp {} collected/ \;
+          ls -la collected
+          count=$(ls collected/*.deb 2>/dev/null | wc -l)
+          [[ "${count}" -ge 2 ]] || { echo "ERROR: expected >=2 debs, found ${count}" >&2; exit 1; }
+          for arch in amd64 arm64; do
+            ls collected/*_"${arch}".deb >/dev/null 2>&1 \
+              || { echo "ERROR: no ${arch} deb present" >&2; exit 1; }
+          done
+          for f in collected/*.deb; do
+            # Derive distro from the package name: ros-<distro>-ros2-tui-launcher_...
+            distro=$(dpkg-deb --field "${f}" Package | sed -E 's/^ros-([^-]+)-.*/\1/')
+            dpkg-deb --field "${f}" Depends | grep -q "ros-${distro}-rclcpp" \
+              || { echo "ERROR: ${f} missing ros-${distro}-rclcpp dependency" >&2; exit 1; }
+            echo "OK: $(basename "${f}") [${distro}]"
+          done
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release edit "${TAG}" --repo "${GITHUB_REPOSITORY}" --notes-file release-notes.md
+            gh release upload "${TAG}" collected/*.deb --repo "${GITHUB_REPOSITORY}" --clobber
+          else
+            gh release create "${TAG}" collected/*.deb \
+              --repo "${GITHUB_REPOSITORY}" --title "${TAG}" --notes-file release-notes.md
+          fi
