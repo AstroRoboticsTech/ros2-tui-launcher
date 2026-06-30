@@ -18,12 +18,16 @@ fi
 
 TAG="v${VERSION}"
 shopt -s nullglob
-debs=("${DIST_DIR}"/ros-"${ROS_DISTRO}"-ros2-tui-launcher_"${VERSION}"-*_amd64.deb)
+# Match any architecture (amd64, arm64, …) — collect every per-arch deb present.
+debs=("${DIST_DIR}"/ros-"${ROS_DISTRO}"-ros2-tui-launcher_"${VERSION}"-*_*.deb)
 if [[ ${#debs[@]} -eq 0 ]]; then
   echo "ERROR: no .deb matching version ${VERSION} in ${DIST_DIR}." >&2
   echo "       Run 'just deb ${ROS_DISTRO}' first." >&2
   exit 1
 fi
+
+echo ">> Uploading ${#debs[@]} asset(s):"
+printf '   %s\n' "${debs[@]##*/}"
 
 cd "${REPO_ROOT}"
 

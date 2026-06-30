@@ -7,8 +7,8 @@ OUT_DIR="${REPO_ROOT}/dist/${ROS_DISTRO}"
 IMAGE="ros2-tui-launcher/packager:${ROS_DISTRO}"
 
 case "${ROS_DISTRO}" in
-  jazzy) ;;
-  *) echo "Unsupported ROS_DISTRO: ${ROS_DISTRO} (only 'jazzy' is wired up today)" >&2; exit 2 ;;
+  jazzy|humble) ;;
+  *) echo "Unsupported ROS_DISTRO: ${ROS_DISTRO} (supported: jazzy, humble)" >&2; exit 2 ;;
 esac
 
 mkdir -p "${OUT_DIR}"
