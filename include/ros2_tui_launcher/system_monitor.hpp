@@ -14,7 +14,7 @@ namespace rtl {
 struct SystemInfo {
     std::string cpu_model;
     int cpu_cores = 0;          ///< Physical cores
-    int cpu_threads = 0;        ///< Logical threads (from libproc2)
+    int cpu_threads = 0;        ///< Logical threads (online CPUs)
     unsigned long mem_total_kb = 0;
     unsigned long mem_used_kb = 0;
     unsigned long mem_available_kb = 0;
@@ -50,7 +50,8 @@ struct ProcessTreeNode {
     unsigned long total_gpu_mem_mb = 0;
 };
 
-/// Monitors system resources and per-process stats using libproc2.
+/// Monitors system resources and per-process stats by reading /proc directly
+/// (distro-agnostic — works on any Linux, no procps/libproc2 dependency).
 /// Thread-safe: all public methods can be called from any thread.
 class SystemMonitor {
 public:
@@ -84,14 +85,15 @@ private:
     /// Recursively build tree from cached_procs_.
     ProcessTreeNode buildTree(pid_t pid) const;
 
-    // libproc2 opaque handles (forward-declared as void* to avoid C header in hpp)
-    void* pids_handle_ = nullptr;
-    void* stat_handle_ = nullptr;
-    void* mem_handle_ = nullptr;
-
     // NVML state (opaque handles, valid only when nvml_initialized_ is true)
     bool nvml_initialized_ = false;
     void* nvml_device_ = nullptr;  // nvmlDevice_t
+
+    // Tegra/Jetson state (integrated GPU exposed via sysfs, no NVML/nvidia-smi).
+    // Active when tegra_gpu_ is true; takes priority over NVML on Jetson boards.
+    bool tegra_gpu_ = false;
+    std::string tegra_load_path_;  ///< sysfs GPU load file (per-mille, 0..1000)
+    std::string tegra_temp_path_;  ///< sysfs GPU thermal-zone temp (millidegrees)
 
     mutable std::mutex mutex_;
     SystemInfo cached_system_;
