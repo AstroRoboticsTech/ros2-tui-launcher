@@ -42,14 +42,21 @@ void NodeInspector::doRefresh() {
             dn.name = full_name.substr(1);
         }
 
-        // Check if this is a lifecycle node by looking for lifecycle services
-        std::string lifecycle_prefix = full_name + "/get_state";
+        // Check if this is a lifecycle node: it exposes a get_state service at
+        // exactly "<full_name>/get_state".  Exact match (not substring) so a
+        // plain "/talker" is not misflagged by "/lc_talker/get_state".
+        std::string get_state_srv = full_name + "/get_state";
         for (const auto& [svc_name, _] : all_services) {
-            if (svc_name.find(lifecycle_prefix) != std::string::npos ||
-                svc_name.find(dn.name + "/get_state") != std::string::npos) {
+            if (svc_name == get_state_srv) {
                 dn.is_lifecycle = true;
                 break;
             }
+        }
+
+        // Query the current lifecycle state for lifecycle nodes.  Bounded per
+        // node (get_state confirmed present above), so this stays responsive.
+        if (dn.is_lifecycle) {
+            dn.lifecycle_state = queryLifecycleState(dn.name, dn.ns);
         }
 
         new_map[full_name] = std::move(dn);
@@ -112,7 +119,10 @@ DiscoveredNode NodeInspector::nodeInfo(const std::string& full_name) const {
 std::string NodeInspector::queryLifecycleState(
     const std::string& node_name, const std::string& node_ns)
 {
-    std::string service_name = node_ns + "/" + node_name + "/get_state";
+    // Root namespace is "/"; joining it naively yields a "//node" double slash
+    // that no service matches, so collapse it to an empty prefix.
+    std::string prefix = (node_ns == "/" || node_ns.empty()) ? "" : node_ns;
+    std::string service_name = prefix + "/" + node_name + "/get_state";
 
     // Reuse cached client or create a new one
     rclcpp::Client<lifecycle_msgs::srv::GetState>::SharedPtr client;

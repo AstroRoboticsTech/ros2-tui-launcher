@@ -134,13 +134,14 @@ void TuiRunner::run() {
             return true;
         }
 
-        // Tab switching — match both upper and lowercase hotkeys
+        // Tab switching — hotkeys are uppercase; match case-sensitively so
+        // lowercase characters fall through to the active screen (e.g. 'c'
+        // clears the Log screen instead of jumping to the Create tab).
         if (event.is_character()) {
-            std::string ch = event.character();
-            char ch_upper = static_cast<char>(std::toupper(ch[0]));
+            const std::string& ch = event.character();
             for (int i = 0; i < (int)screens_.size(); i++) {
                 auto hk = screens_[i]->hotkey();
-                if (!hk.empty() && ch_upper == std::toupper(hk[0])) {
+                if (!hk.empty() && ch == hk) {
                     selected_tab = i;
                     return true;
                 }

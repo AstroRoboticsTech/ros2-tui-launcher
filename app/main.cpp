@@ -159,7 +159,6 @@ int runTui(const std::string& profile_dir,
     tui.addScreen<rtl::tui::TopicScreen>(&topic_mon, &node_inspector);
     tui.addScreen<rtl::tui::NodeScreen>(&node_inspector);
     tui.addScreen<rtl::tui::ParameterScreen>(&node_inspector, &param_mgr);
-    tui.addScreen<rtl::tui::CreateScreen>(node);
 
     try {
         tui.run();
@@ -338,7 +337,7 @@ int main(int argc, char* argv[]) {
     CLI::App app{"ros2-tui-launcher - ROS 2 Launch TUI Manager"};
     app.name("rtl");
     app.set_help_flag("-h,--help", "Show this help and exit");
-    app.set_version_flag("-V,--version", std::string("rtl 0.3.0"));
+    app.set_version_flag("-V,--version", std::string("rtl 0.3.1"));
     app.require_subcommand(0, 1);
     app.footer(
         "Examples:\n"
@@ -346,12 +345,12 @@ int main(int argc, char* argv[]) {
         "  rtl tui --profiles ./profiles       Launch with a profile directory\n"
         "  rtl config my-profile.yaml          Open one YAML in the TUI\n"
         "  rtl config generate -o gen.yaml     Scaffold from the live ROS 2 graph\n"
-        "  rtl config new                      Interactive Create screen\n"
+        "  rtl create                          Interactive Create screen\n"
         "  rtl config validate gen.yaml        Schema-check\n"
         "  rtl config list -p ./profiles       List profiles in a directory\n"
         "\n"
         "TUI hotkeys:\n"
-        "  [L] Launch  [G] Logs  [T] Topics  [N] Nodes  [P] Params  [C] Create  [Q] Quit\n"
+        "  [L] Launch  [G] Logs  [T] Topics  [N] Nodes  [P] Params  [Q] Quit\n"
         "\n"
         "Anything after '--ros-args' is forwarded verbatim to rclcpp.");
 
@@ -391,8 +390,8 @@ int main(int argc, char* argv[]) {
     gen_cmd->add_flag("--launch", gen_launch,
                       "After writing, open the new profile in the TUI");
 
-    auto* new_cmd = config_cmd->add_subcommand(
-        "new", "Open the interactive Create screen and scaffold a profile from the graph");
+    auto* create_cmd = app.add_subcommand(
+        "create", "Open the interactive Create screen and scaffold a profile from the graph");
 
     auto* validate_cmd = config_cmd->add_subcommand("validate", "Validate a profile YAML");
     std::string validate_file;
@@ -415,7 +414,7 @@ int main(int argc, char* argv[]) {
             gen_skip_topics, gen_skip_nodes, gen_launch};
         return runConfigGenerate(gargs, std::move(ros_argv));
     }
-    if (new_cmd->parsed())      return runConfigNew(std::move(ros_argv));
+    if (create_cmd->parsed())   return runConfigNew(std::move(ros_argv));
     if (validate_cmd->parsed()) return runConfigValidate(validate_file);
     if (list_cmd->parsed())     return runConfigList(list_dir);
 

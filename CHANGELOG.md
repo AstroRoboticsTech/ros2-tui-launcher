@@ -10,6 +10,29 @@ keep each version's notes self-contained and user-facing.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-07-02
+
+### Added
+- `rtl create` — the interactive profile-scaffolding screen is now a standalone
+  top-level command instead of a tab in the main TUI (replaces `rtl config new`).
+
+### Changed
+- Removed the Create tab from the main TUI. Tab hotkeys are now case-sensitive
+  uppercase, freeing lowercase keys for per-screen actions.
+- Widened the Topics view's topic-name column so longer names are no longer
+  truncated.
+
+### Fixed
+- Nodes view now shows the live lifecycle state (active/inactive/unconfigured/…)
+  for lifecycle nodes; the query was previously never issued and the column was
+  always blank. Also fixed the `get_state` service name for root-namespace nodes.
+- Lifecycle detection no longer misflags a plain node as lifecycle when another
+  node's name is a suffix of it (e.g. `talker` vs `lc_talker`).
+- The lowercase `c` key now clears the Logs view instead of being swallowed by
+  the Create tab's hotkey.
+- Mouse-wheel and keyboard scrolling now work on the Nodes, Launch, and
+  Parameters views, which previously rendered full lists without a viewport.
+
 ## [0.3.0] - 2026-06-30
 
 ### Added
@@ -52,7 +75,8 @@ keep each version's notes self-contained and user-facing.
 - File-persistent logging and launch-profile validation.
 - Docker-based `.deb` packaging and the `rtl` CLI wrapper.
 
-[Unreleased]: https://github.com/franklinselva/ros2-tui-launcher/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/franklinselva/ros2-tui-launcher/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/franklinselva/ros2-tui-launcher/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/franklinselva/ros2-tui-launcher/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/franklinselva/ros2-tui-launcher/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/franklinselva/ros2-tui-launcher/releases/tag/v0.1.0
