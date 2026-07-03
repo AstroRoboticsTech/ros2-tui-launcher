@@ -109,6 +109,14 @@ void NodeScreen::tick() {
     inspector_->refresh();
     auto nodes = inspector_->nodes();
 
+    // nodes() comes from an unordered_map, so impose a stable order: lifecycle
+    // nodes first (their state is what you watch), then alphabetical by name.
+    std::sort(nodes.begin(), nodes.end(),
+        [](const DiscoveredNode& a, const DiscoveredNode& b) {
+            if (a.is_lifecycle != b.is_lifecycle) return a.is_lifecycle;
+            return a.name < b.name;
+        });
+
     std::lock_guard lock(mutex_);
     cached_nodes_ = std::move(nodes);
 }
