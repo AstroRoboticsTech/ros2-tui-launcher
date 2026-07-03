@@ -3,6 +3,7 @@
 #include <ftxui/dom/elements.hpp>
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/event.hpp>
+#include <ftxui/screen/terminal.hpp>
 
 #include <algorithm>
 #include <functional>
@@ -201,7 +202,11 @@ ftxui::Component LaunchScreen::component() {
         const auto& profile = (*profiles_)[*active_profile_idx_];
 
         // Update scroll list item count (entry count, not expanded rows)
+        auto term_size = Terminal::Size();
+        int viewport_h = std::max(3, term_size.dimy - 20);
+        scroll_list_.setViewportHeight(viewport_h);
         scroll_list_.setItemCount((int)profile.entries.size());
+        auto [row_start, row_end] = scroll_list_.visibleRange();
 
         // --- System gauges ---
         auto gauges = renderGauges();
@@ -258,9 +263,9 @@ ftxui::Component LaunchScreen::component() {
         table_rows.push_back(separator());
 
         int selected = scroll_list_.selected();
-        int entry_idx = 0;
 
-        for (const auto& entry : profile.entries) {
+        for (int entry_idx = row_start; entry_idx < row_end; ++entry_idx) {
+            const auto& entry = profile.entries[entry_idx];
             std::string proc_name = entry.displayName();
 
             // Find matching process info via O(1) lookup
@@ -377,8 +382,6 @@ ftxui::Component LaunchScreen::component() {
                     table_rows.push_back(hbox(std::move(child_cols)));
                 }
             }
-
-            entry_idx++;
         }
 
         // Assemble final layout
@@ -387,11 +390,18 @@ ftxui::Component LaunchScreen::component() {
         for (auto& r : header_row) result.push_back(r);
         for (auto& r : table_rows) result.push_back(r);
 
+        int total_entries = (int)profile.entries.size();
+        std::string scroll_info;
+        if (total_entries > viewport_h) {
+            scroll_info = " [" + std::to_string(row_start + 1) + "-" + std::to_string(row_end)
+                        + "/" + std::to_string(total_entries) + "] ";
+        }
+
         result.push_back(filler());
         result.push_back(separator());
         result.push_back(
             hbox({
-                text(" [\u2191\u2193] Select  [Enter] Toggle  [e] Expand  [r] Restart  [a] All  [s] Stop All  [p] Profile ") | dim,
+                text(" [\u2191\u2193] Select  [Enter] Toggle  [e] Expand  [r] Restart  [a] All  [s] Stop All  [p] Profile " + scroll_info) | dim,
             }));
 
         return vbox(std::move(result));

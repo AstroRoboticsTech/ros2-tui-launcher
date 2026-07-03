@@ -19,7 +19,7 @@ Grab the latest `.deb` from the [releases page](https://github.com/franklinselva
 then install with `apt` so runtime dependencies resolve automatically:
 
 ```bash
-VERSION=0.3.0
+VERSION=0.3.1
 DISTRO=jazzy                                  # jazzy (Noble) or humble (Jammy)
 ARCH=$(dpkg --print-architecture)             # amd64 or arm64
 CODENAME=$(. /etc/os-release; echo "$UBUNTU_CODENAME")  # noble or jammy
@@ -64,7 +64,7 @@ rtl tui [--profiles DIR | --config FILE]
                                    Explicit launch
 rtl config <FILE.yaml>             Open FILE in the TUI
 rtl config generate [opts]         Scaffold a profile from the running ROS 2 graph
-rtl config new                     Open the interactive Create screen
+rtl create                         Open the interactive Create screen
 rtl config validate <FILE>         Schema-check a profile YAML
 rtl config list [--profiles DIR]   List profiles found in a directory
 ```
@@ -83,10 +83,11 @@ rtl config generate --output my-graph.yaml --launch
 ```
 
 For an interactive flow with checkboxes per discovered node/topic and inline
-package/executable editing, use the Create screen:
+package/executable editing, use the Create screen. It is a standalone command,
+not a tab in the main TUI:
 
 ```bash
-rtl config new          # opens straight into the [C]reate screen
+rtl create              # opens straight into the Create screen
 ```
 
 The generator captures:
@@ -114,8 +115,11 @@ Bundled example profiles ship under `/usr/share/ros2_tui_launcher/config/profile
 | `T` | Topics — live rate/bandwidth/type inspection |
 | `N` | Nodes — graph view, publishers/subscribers/services |
 | `P` | Parameters — list and edit node parameters |
-| `C` | Create — scaffold a profile from the live ROS 2 graph |
 | `Q` | Quit |
+
+Tab hotkeys are case-sensitive uppercase (or use number keys `1`–`5`); lowercase
+keys are reserved for per-screen actions (e.g. `c` clears the Logs view). Profile
+scaffolding lives in the standalone `rtl create` command, not a TUI tab.
 
 Mouse, arrow-key navigation, and incremental search work on every list view.
 

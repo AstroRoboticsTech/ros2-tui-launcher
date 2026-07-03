@@ -3,6 +3,7 @@
 #include <ftxui/dom/elements.hpp>
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/event.hpp>
+#include <ftxui/screen/terminal.hpp>
 
 #include <algorithm>
 
@@ -248,13 +249,18 @@ std::vector<int> ParameterScreen::filteredParamIndices() const {
 }
 
 Element ParameterScreen::renderNodeList() {
+    auto term_size = Terminal::Size();
+    int viewport_h = std::max(3, term_size.dimy - 6);
+    node_list_.setViewportHeight(viewport_h);
+    node_list_.setItemCount((int)cached_node_names_.size());
+    auto [start, end] = node_list_.visibleRange();
     int selected = node_list_.selected();
 
     Elements rows;
     rows.push_back(text(" NODES") | bold);
     rows.push_back(separator());
 
-    for (int i = 0; i < (int)cached_node_names_.size(); ++i) {
+    for (int i = start; i < end; ++i) {
         bool is_sel = (i == selected && active_panel_ == Panel::Nodes);
         std::string prefix = is_sel ? " > " : "   ";
         auto row = text(prefix + cached_node_names_[i]);
@@ -308,6 +314,9 @@ Element ParameterScreen::renderParamPanel() {
 
     // Update filtered indices
     filtered_indices_ = filteredParamIndices();
+    auto term_size = Terminal::Size();
+    int viewport_h = std::max(3, term_size.dimy - 20);
+    param_list_.setViewportHeight(viewport_h);
     param_list_.setItemCount((int)filtered_indices_.size());
 
     if (filtered_indices_.empty()) {
@@ -330,7 +339,8 @@ Element ParameterScreen::renderParamPanel() {
 
     // Parameter rows
     int param_sel = param_list_.selected();
-    for (int fi = 0; fi < (int)filtered_indices_.size(); ++fi) {
+    auto [param_start, param_end] = param_list_.visibleRange();
+    for (int fi = param_start; fi < param_end; ++fi) {
         int pi = filtered_indices_[fi];
         const auto& p = cached_params_.params[pi];
 

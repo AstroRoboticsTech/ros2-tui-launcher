@@ -37,8 +37,8 @@ ftxui::Component TopicScreen::component() {
 
         // Header
         auto header = hbox({
-            text("   TOPIC") | bold | size(WIDTH, EQUAL, 40),
-            text("TYPE") | bold | size(WIDTH, EQUAL, 30),
+            text("   TOPIC") | bold | size(WIDTH, EQUAL, 56),
+            text("TYPE") | bold | size(WIDTH, EQUAL, 32),
             text("Hz") | bold | size(WIDTH, EQUAL, 10),
             text("EXPECTED") | bold | size(WIDTH, EQUAL, 10),
             text("PUB") | bold | size(WIDTH, EQUAL, 6),
@@ -120,16 +120,16 @@ ftxui::Component TopicScreen::component() {
             }
 
             std::string type_display = t.type;
-            if (type_display.size() > 28) {
-                type_display = type_display.substr(0, 25) + "...";
+            if (type_display.size() > 30) {
+                type_display = type_display.substr(0, 27) + "...";
             }
 
             bool is_selected = (idx == selected);
             std::string prefix = is_selected ? " > " : "   ";
 
             auto row = hbox({
-                text(prefix + t.name) | size(WIDTH, EQUAL, 40),
-                text(type_display) | dim | size(WIDTH, EQUAL, 30),
+                text(prefix + t.name) | size(WIDTH, EQUAL, 56),
+                text(type_display) | dim | size(WIDTH, EQUAL, 32),
                 text(hz_ss.str()) | color(t.stale ? Color::Red : Color::White) | size(WIDTH, EQUAL, 10),
                 text(exp_ss.str()) | dim | size(WIDTH, EQUAL, 10),
                 text(std::to_string(t.publisher_count)) | size(WIDTH, EQUAL, 6),
