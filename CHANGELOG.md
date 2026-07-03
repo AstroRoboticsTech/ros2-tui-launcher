@@ -21,6 +21,8 @@ keep each version's notes self-contained and user-facing.
   uppercase, freeing lowercase keys for per-screen actions.
 - Widened the Topics view's topic-name column so longer names are no longer
   truncated.
+- Nodes view now lists lifecycle nodes first (then alphabetical) with a stable
+  order across refreshes, so their state is easy to scan.
 
 ### Fixed
 - Nodes view now shows the live lifecycle state (active/inactive/unconfigured/…)
