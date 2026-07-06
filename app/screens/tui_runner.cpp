@@ -105,7 +105,18 @@ void TuiRunner::run() {
         bool input_active = (selected_tab >= 0 && selected_tab < tab_count)
             && screens_[selected_tab]->inputActive();
 
-        // Tab / Shift+Tab always work, even during text input
+        // When a screen is capturing input (search/param edit), it gets ALL
+        // events first — including Tab. Otherwise a stray Tab would switch the
+        // top-level tab mid-edit and silently discard the in-progress value.
+        // Exit the input mode (Esc) to regain global Tab navigation.
+        if (input_active) {
+            if (selected_tab >= 0 && selected_tab < (int)screen_components.size()) {
+                return screen_components[selected_tab]->OnEvent(event);
+            }
+            return false;
+        }
+
+        // Tab / Shift+Tab switch top-level tabs
         if (event == Event::Tab) {
             selected_tab = (selected_tab + 1) % tab_count;
             return true;
@@ -113,14 +124,6 @@ void TuiRunner::run() {
         if (event == Event::TabReverse) {
             selected_tab = (selected_tab - 1 + tab_count) % tab_count;
             return true;
-        }
-
-        // When input is active, forward everything else to the screen
-        if (input_active) {
-            if (selected_tab >= 0 && selected_tab < (int)screen_components.size()) {
-                return screen_components[selected_tab]->OnEvent(event);
-            }
-            return false;
         }
 
         // --- Normal mode (no screen input active) ---

@@ -18,6 +18,23 @@ bool ParameterScreen::inputActive() const {
     return search_bar_.inputActive() || editing_;
 }
 
+bool ParameterScreen::isEditableType(uint8_t type) {
+    using PT = rcl_interfaces::msg::ParameterType;
+    switch (type) {
+        case PT::PARAMETER_BOOL:
+        case PT::PARAMETER_INTEGER:
+        case PT::PARAMETER_DOUBLE:
+        case PT::PARAMETER_STRING:
+        case PT::PARAMETER_INTEGER_ARRAY:
+        case PT::PARAMETER_DOUBLE_ARRAY:
+        case PT::PARAMETER_BOOL_ARRAY:
+        case PT::PARAMETER_STRING_ARRAY:
+            return true;
+        default:
+            return false;  // byte[] and unset are not editable
+    }
+}
+
 ftxui::Component ParameterScreen::component() {
     auto renderer = Renderer([this] {
         std::lock_guard lock(mutex_);
@@ -37,14 +54,41 @@ ftxui::Component ParameterScreen::component() {
         if (editing_) {
             if (event == ftxui::Event::Escape) {
                 editing_ = false;
+                set_pending_ = false;
                 edit_error_.clear();
                 return true;
             }
             if (event == ftxui::Event::Return) {
+                // Ignore repeated Enter while a set is already in flight
+                if (set_pending_) return true;
+
+                // Pre-send range validation for numeric types
+                if (!edit_buffer_.empty() &&
+                    (edit_has_int_range_ || edit_has_float_range_)) {
+                    try {
+                        double v = std::stod(edit_buffer_);
+                        double lo = edit_has_int_range_
+                            ? (double)edit_int_min_ : edit_float_min_;
+                        double hi = edit_has_int_range_
+                            ? (double)edit_int_max_ : edit_float_max_;
+                        if (v < lo || v > hi) {
+                            std::ostringstream oss;
+                            oss << "Out of range [" << lo << ", " << hi << "]";
+                            edit_error_ = oss.str();
+                            return true;
+                        }
+                    } catch (...) {
+                        // Non-numeric — let setParameter's parser report it
+                    }
+                }
+
                 // Commit the edit
                 if (!cached_node_names_.empty()) {
                     int node_sel = node_list_.selected();
                     if (node_sel >= 0 && node_sel < (int)cached_node_names_.size()) {
+                        set_pending_ = true;
+                        set_pending_time_ = std::chrono::steady_clock::now();
+                        edit_error_.clear();
                         param_mgr_->setParameter(
                             cached_node_names_[node_sel],
                             edit_param_name_,
@@ -52,6 +96,7 @@ ftxui::Component ParameterScreen::component() {
                             edit_param_type_,
                             [this](bool success, const std::string& msg) {
                                 std::lock_guard lock(mutex_);
+                                set_pending_ = false;
                                 if (success) {
                                     editing_ = false;
                                     edit_error_.clear();
@@ -65,6 +110,8 @@ ftxui::Component ParameterScreen::component() {
                 }
                 return true;
             }
+            // While a set is in flight, swallow keystrokes (except Esc/Enter above)
+            if (set_pending_) return true;
             if (event == ftxui::Event::Backspace) {
                 if (!edit_buffer_.empty()) edit_buffer_.pop_back();
                 edit_error_.clear();
@@ -86,7 +133,7 @@ ftxui::Component ParameterScreen::component() {
         }
         if (search_bar_.inputActive()) return false;
 
-        // Panel switching with Left/Right
+        // Panel switching with Left/Right (Tab is reserved for top-level tabs)
         if (event == ftxui::Event::ArrowLeft) {
             active_panel_ = Panel::Nodes;
             return true;
@@ -95,17 +142,20 @@ ftxui::Component ParameterScreen::component() {
             active_panel_ = Panel::Params;
             return true;
         }
-        if (event == ftxui::Event::Tab) {
-            active_panel_ = (active_panel_ == Panel::Nodes) ? Panel::Params : Panel::Nodes;
-            return true;
-        }
+
+        // Events the scroll lists consume (arrows, paging, vim j/k, mouse wheel)
+        auto is_nav = [](const ftxui::Event& e) {
+            return e == ftxui::Event::ArrowUp || e == ftxui::Event::ArrowDown ||
+                   e == ftxui::Event::PageUp || e == ftxui::Event::PageDown ||
+                   e == ftxui::Event::Home || e == ftxui::Event::End ||
+                   e == ftxui::Event::Character("j") ||
+                   e == ftxui::Event::Character("k") ||
+                   e.is_mouse();
+        };
 
         // Delegate navigation to active panel's scroll list
         if (active_panel_ == Panel::Nodes) {
-            if (event == ftxui::Event::ArrowUp || event == ftxui::Event::ArrowDown ||
-                event == ftxui::Event::PageUp || event == ftxui::Event::PageDown ||
-                event == ftxui::Event::Home || event == ftxui::Event::End ||
-                event.is_mouse()) {
+            if (is_nav(event)) {
                 bool consumed = node_list_.handleEvent(event);
                 if (consumed) {
                     // Reset param list when switching nodes
@@ -114,10 +164,7 @@ ftxui::Component ParameterScreen::component() {
                 return consumed;
             }
         } else {
-            if (event == ftxui::Event::ArrowUp || event == ftxui::Event::ArrowDown ||
-                event == ftxui::Event::PageUp || event == ftxui::Event::PageDown ||
-                event == ftxui::Event::Home || event == ftxui::Event::End ||
-                event.is_mouse()) {
+            if (is_nav(event)) {
                 return param_list_.handleEvent(event);
             }
         }
@@ -132,6 +179,11 @@ ftxui::Component ParameterScreen::component() {
                         const auto& param = cached_params_.params[pi];
                         if (param.read_only) {
                             status_message_ = "Parameter is read-only";
+                            status_time_ = std::chrono::steady_clock::now();
+                            return true;
+                        }
+                        if (!isEditableType(param.type)) {
+                            status_message_ = "Type not editable: " + param.type_name;
                             status_time_ = std::chrono::steady_clock::now();
                             return true;
                         }
@@ -158,9 +210,16 @@ ftxui::Component ParameterScreen::component() {
                         }
                         // Other types: enter edit mode
                         editing_ = true;
+                        set_pending_ = false;
                         edit_buffer_ = param.value_str;
                         edit_param_name_ = param.name;
                         edit_param_type_ = param.type;
+                        edit_has_int_range_ = param.has_integer_range;
+                        edit_int_min_ = param.int_range_min;
+                        edit_int_max_ = param.int_range_max;
+                        edit_has_float_range_ = param.has_float_range;
+                        edit_float_min_ = param.float_range_min;
+                        edit_float_max_ = param.float_range_max;
                         edit_error_.clear();
                         return true;
                     }
@@ -209,10 +268,18 @@ void ParameterScreen::tick() {
     inspector_->refresh();
     auto nodes = inspector_->nodes();
 
-    // Build sorted node name list
+    // Build sorted node name list. Skip hidden/infrastructure nodes (names
+    // whose leaf starts with '_', e.g. the "/_ros2cli_daemon_*" CLI daemon or
+    // hidden rosbridge helpers) — they expose no editable parameters and would
+    // otherwise sort to the top and default-select into a dead "service not
+    // available" panel.
     std::vector<std::string> node_names;
     node_names.reserve(nodes.size());
     for (const auto& n : nodes) {
+        auto leaf = n.full_name.rfind('/');
+        bool hidden = (leaf != std::string::npos && leaf + 1 < n.full_name.size()
+                       && n.full_name[leaf + 1] == '_');
+        if (hidden) continue;
         node_names.push_back(n.full_name);
     }
     std::sort(node_names.begin(), node_names.end());
@@ -221,6 +288,16 @@ void ParameterScreen::tick() {
     NodeParameters params;
     {
         std::lock_guard lock(mutex_);
+
+        // Time out a stuck set_parameters call so the edit box does not hang
+        // forever on an unresponsive node.
+        if (set_pending_ &&
+            std::chrono::steady_clock::now() - set_pending_time_ >
+                std::chrono::seconds(5)) {
+            set_pending_ = false;
+            edit_error_ = "Set timed out (node not responding)";
+        }
+
         cached_node_names_ = std::move(node_names);
         node_list_.setItemCount((int)cached_node_names_.size());
 
@@ -328,12 +405,18 @@ Element ParameterScreen::renderParamPanel() {
         return vbox(std::move(rows)) | flex;
     }
 
+    // Column widths (kept in sync between header and rows)
+    constexpr int kNameW = 35;
+    constexpr int kTypeW = 10;
+    constexpr int kValueW = 40;
+    constexpr int kRoW = 5;
+
     // Header
     rows.push_back(hbox({
-        text("   NAME") | bold | size(WIDTH, EQUAL, 35),
-        text("TYPE") | bold | size(WIDTH, EQUAL, 10),
-        text("VALUE") | bold | size(WIDTH, EQUAL, 30),
-        text("R/O") | bold | size(WIDTH, EQUAL, 5),
+        text("   NAME") | bold | size(WIDTH, EQUAL, kNameW),
+        text("TYPE") | bold | size(WIDTH, EQUAL, kTypeW),
+        text("VALUE") | bold | size(WIDTH, EQUAL, kValueW),
+        text("R/O") | bold | size(WIDTH, EQUAL, kRoW),
     }));
     rows.push_back(separator());
 
@@ -347,11 +430,17 @@ Element ParameterScreen::renderParamPanel() {
         bool is_sel = (fi == param_sel && active_panel_ == Panel::Params);
         std::string prefix = is_sel ? " > " : "   ";
 
-        // Value display — show edit buffer if editing this param
+        // Value display — show edit buffer if editing this param. Keep the
+        // caret end visible by windowing to the last kValueW-1 chars so long
+        // values/strings remain editable within the fixed column.
         std::string value_display = p.value_str;
         bool is_editing_this = editing_ && p.name == edit_param_name_ && is_sel;
         if (is_editing_this) {
-            value_display = edit_buffer_ + "_";
+            std::string buf = edit_buffer_ + (set_pending_ ? "" : "_");
+            if ((int)buf.size() > kValueW) {
+                buf = "…" + buf.substr(buf.size() - (kValueW - 1));
+            }
+            value_display = buf;
         }
 
         Color type_color = Color::GrayLight;
@@ -361,10 +450,10 @@ Element ParameterScreen::renderParamPanel() {
         else if (p.type_name == "string") type_color = Color::Yellow;
 
         auto row = hbox({
-            text(prefix + p.name) | size(WIDTH, EQUAL, 35),
-            text(p.type_name) | color(type_color) | size(WIDTH, EQUAL, 10),
-            text(value_display) | (is_editing_this ? color(Color::Cyan) : nothing) | size(WIDTH, EQUAL, 30),
-            text(p.read_only ? "[RO]" : "") | dim | size(WIDTH, EQUAL, 5),
+            text(prefix + p.name) | size(WIDTH, EQUAL, kNameW),
+            text(p.type_name) | color(type_color) | size(WIDTH, EQUAL, kTypeW),
+            text(value_display) | (is_editing_this ? color(Color::Cyan) : nothing) | size(WIDTH, EQUAL, kValueW),
+            text(p.read_only ? "[RO]" : "") | dim | size(WIDTH, EQUAL, kRoW),
         });
 
         if (is_sel) {
@@ -468,13 +557,17 @@ Element ParameterScreen::renderStatusBar() {
 
     Elements bar;
     if (editing_) {
-        bar.push_back(text(" [Enter] Confirm  [Esc] Cancel") | dim);
+        if (set_pending_) {
+            bar.push_back(text(" Setting\u2026  [Esc] Cancel") | color(Color::Yellow));
+        } else {
+            bar.push_back(text(" [Enter] Confirm  [Esc] Cancel  (arrays: comma-separated)") | dim);
+        }
     } else {
         bar.push_back(text(" [" + std::string(active_panel_ == Panel::Nodes ? ">" : " ") +
                            "Nodes] [" +
                            std::string(active_panel_ == Panel::Params ? ">" : " ") +
                            "Params]  ") | dim);
-        bar.push_back(text("[Tab/\u2190\u2192] Panel  [\u2191\u2193] Select  [Enter] Edit  [d] Dump  [/] Search  [r] Refresh") | dim);
+        bar.push_back(text("[\u2190\u2192] Panel  [\u2191\u2193/jk] Select  [Enter] Edit  [d] Dump  [/] Search  [r] Refresh") | dim);
     }
 
     if (!status.empty()) {

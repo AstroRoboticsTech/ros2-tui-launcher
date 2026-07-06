@@ -337,7 +337,7 @@ int main(int argc, char* argv[]) {
     CLI::App app{"ros2-tui-launcher - ROS 2 Launch TUI Manager"};
     app.name("rtl");
     app.set_help_flag("-h,--help", "Show this help and exit");
-    app.set_version_flag("-V,--version", std::string("rtl 0.3.1"));
+    app.set_version_flag("-V,--version", std::string("rtl 0.3.2"));
     app.require_subcommand(0, 1);
     app.footer(
         "Examples:\n"

@@ -19,7 +19,7 @@ Grab the latest `.deb` from the [releases page](https://github.com/franklinselva
 then install with `apt` so runtime dependencies resolve automatically:
 
 ```bash
-VERSION=0.3.1
+VERSION=0.3.2
 DISTRO=jazzy                                  # jazzy (Noble) or humble (Jammy)
 ARCH=$(dpkg --print-architecture)             # amd64 or arm64
 CODENAME=$(. /etc/os-release; echo "$UBUNTU_CODENAME")  # noble or jammy

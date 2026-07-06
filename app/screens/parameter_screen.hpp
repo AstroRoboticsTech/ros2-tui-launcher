@@ -6,6 +6,8 @@
 #include "ros2_tui_launcher/node_inspector.hpp"
 #include "ros2_tui_launcher/parameter_manager.hpp"
 
+#include <chrono>
+#include <cstdint>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -59,12 +61,28 @@ private:
     // Filtered parameter indices (updated each frame)
     std::vector<int> filtered_indices_;
 
+    /// True if this parameter type can be edited in the TUI.
+    static bool isEditableType(uint8_t type);
+
     // Edit mode state
     bool editing_ = false;
     std::string edit_buffer_;
     std::string edit_param_name_;
     uint8_t edit_param_type_ = 0;
     std::string edit_error_;
+
+    // Declared range of the parameter being edited (for pre-send validation)
+    bool edit_has_int_range_ = false;
+    int64_t edit_int_min_ = 0;
+    int64_t edit_int_max_ = 0;
+    bool edit_has_float_range_ = false;
+    double edit_float_min_ = 0.0;
+    double edit_float_max_ = 0.0;
+
+    // In-flight set state — while a set_parameters call is pending, the edit
+    // stays open showing "Setting…" until the callback or a timeout resolves it.
+    bool set_pending_ = false;
+    std::chrono::steady_clock::time_point set_pending_time_;
 
     // Status message (e.g. "Dumped to file.yaml")
     std::string status_message_;
