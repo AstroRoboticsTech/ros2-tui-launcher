@@ -377,6 +377,35 @@ std::string ParameterManager::paramTypeName(uint8_t type) {
     }
 }
 
+namespace {
+
+/// Split a list value into trimmed element tokens.
+/// Accepts optional surrounding brackets: "[a, b, c]" or "a, b, c".
+/// An empty (or whitespace/"[]") input yields an empty vector.
+std::vector<std::string> splitListTokens(const std::string& in) {
+    std::string s = in;
+    auto lo = s.find_first_not_of(" \t");
+    auto hi = s.find_last_not_of(" \t");
+    if (lo == std::string::npos) return {};
+    s = s.substr(lo, hi - lo + 1);
+    if (s.size() >= 2 && s.front() == '[' && s.back() == ']') {
+        s = s.substr(1, s.size() - 2);
+    }
+
+    std::vector<std::string> out;
+    std::stringstream ss(s);
+    std::string tok;
+    while (std::getline(ss, tok, ',')) {
+        auto a = tok.find_first_not_of(" \t");
+        auto b = tok.find_last_not_of(" \t");
+        if (a == std::string::npos) continue;  // skip empty element
+        out.push_back(tok.substr(a, b - a + 1));
+    }
+    return out;
+}
+
+}  // namespace
+
 rclcpp::Parameter ParameterManager::parseValue(const std::string& name,
                                                  const std::string& value_str,
                                                  uint8_t type) {
@@ -394,6 +423,36 @@ rclcpp::Parameter ParameterManager::parseValue(const std::string& name,
             return rclcpp::Parameter(name, std::stod(value_str));
         case PT::PARAMETER_STRING:
             return rclcpp::Parameter(name, value_str);
+        case PT::PARAMETER_INTEGER_ARRAY: {
+            std::vector<int64_t> v;
+            for (const auto& t : splitListTokens(value_str))
+                v.push_back(static_cast<int64_t>(std::stoll(t)));
+            return rclcpp::Parameter(name, v);
+        }
+        case PT::PARAMETER_DOUBLE_ARRAY: {
+            std::vector<double> v;
+            for (const auto& t : splitListTokens(value_str))
+                v.push_back(std::stod(t));
+            return rclcpp::Parameter(name, v);
+        }
+        case PT::PARAMETER_BOOL_ARRAY: {
+            std::vector<bool> v;
+            for (const auto& t : splitListTokens(value_str)) {
+                if (t == "true" || t == "1") v.push_back(true);
+                else if (t == "false" || t == "0") v.push_back(false);
+                else throw std::invalid_argument("Bool array elements must be true/false");
+            }
+            return rclcpp::Parameter(name, v);
+        }
+        case PT::PARAMETER_STRING_ARRAY: {
+            std::vector<std::string> v;
+            for (auto t : splitListTokens(value_str)) {
+                if (t.size() >= 2 && t.front() == '"' && t.back() == '"')
+                    t = t.substr(1, t.size() - 2);
+                v.push_back(std::move(t));
+            }
+            return rclcpp::Parameter(name, v);
+        }
         default:
             throw std::invalid_argument("Editing this parameter type is not supported");
     }
