@@ -15,7 +15,7 @@ published for both `amd64` and `arm64` (e.g. NVIDIA Jetson) on each distro.
 
 ## Install (Debian package)
 
-Grab the latest `.deb` from the [releases page](https://github.com/franklinselva/ros2-tui-launcher/releases),
+Grab the latest `.deb` from the [releases page](https://github.com/AstroRoboticsTech/ros2-tui-launcher/releases),
 then install with `apt` so runtime dependencies resolve automatically:
 
 ```bash
@@ -24,7 +24,7 @@ DISTRO=jazzy                                  # jazzy (Noble) or humble (Jammy)
 ARCH=$(dpkg --print-architecture)             # amd64 or arm64
 CODENAME=$(. /etc/os-release; echo "$UBUNTU_CODENAME")  # noble or jammy
 DEB="ros-${DISTRO}-ros2-tui-launcher_${VERSION}-0${CODENAME}_${ARCH}.deb"
-curl -fsSLO "https://github.com/franklinselva/ros2-tui-launcher/releases/download/v${VERSION}/${DEB}"
+curl -fsSLO "https://github.com/AstroRoboticsTech/ros2-tui-launcher/releases/download/v${VERSION}/${DEB}"
 sudo apt install "./${DEB}"
 ```
 
